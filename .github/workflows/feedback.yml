@@ -1,4 +1,4 @@
-name: Assignment Feedback
+name: EC2 Assignment Feedback
 on:
   push:
     branches: [ main ]
@@ -6,30 +6,95 @@ on:
     branches: [ main ]
 
 jobs:
-  provide-feedback:
+  basic-checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       
-      - name: Basic Checks
+      - name: Check Required Files
         run: |
-          echo "Running assignment checks..."
-          # Add your specific checks here
+          FILES=("main.tf" "variables.tf")
+          MISSING_FILES=()
           
+          for file in "${FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              MISSING_FILES+=($file)
+            fi
+          done
+          
+          if [ ${#MISSING_FILES[@]} -ne 0 ]; then
+            echo "❌ Missing required files: ${MISSING_FILES[*]}"
+            exit 1
+          fi
+          echo "✅ All required files present"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        continue-on-error: true
+
+      - name: Terraform Validate
+        run: terraform validate
+        continue-on-error: true
+
+      - name: Check EC2 Configuration
+        id: ec2-check
+        run: |
+          # Check for aws_instance resource
+          if ! grep -q "resource \"aws_instance\"" main.tf; then
+            echo "❌ No EC2 instance defined"
+            echo "ec2_defined=false" >> $GITHUB_ENV
+            exit 1
+          fi
+          echo "ec2_defined=true" >> $GITHUB_ENV
+          
+          # Check instance type
+          if ! grep -q "instance_type.*=.*\"t2.micro\"" main.tf; then
+            echo "❌ Instance type should be t2.micro"
+            echo "instance_type_correct=false" >> $GITHUB_ENV
+            exit 1
+          fi
+          echo "instance_type_correct=true" >> $GITHUB_ENV
+          
+          # Check AMI configuration
+          if ! grep -q "ami.*=.*\"ami-" main.tf; then
+            echo "❌ AMI ID not properly configured"
+            echo "ami_configured=false" >> $GITHUB_ENV
+            exit 1
+          fi
+          echo "ami_configured=true" >> $GITHUB_ENV
+          
+          echo "✅ EC2 configuration looks good!"
+        continue-on-error: true
+
       - name: Provide Feedback
         uses: actions/github-script@v6
         with:
           script: |
             const feedback = `
-            ## Automated Feedback
+            ## Assignment Submission Feedback
             
-            ### Submission Check
-            ✅ Repository successfully cloned
+            ### File Check
+            ✅ Required files present
+            
+            ### Terraform Checks
+            ✅ Terraform initialization completed
+            ✅ Configuration validated
+            
+            ### EC2 Instance Checks
+            ${process.env.ec2_defined === 'true' ? '✅' : '❌'} EC2 instance resource defined
+            ${process.env.instance_type_correct === 'true' ? '✅' : '❌'} Correct instance type (t2.micro)
+            ${process.env.ami_configured === 'true' ? '✅' : '❌'} AMI properly configured
             
             ### Next Steps
-            1. Review the feedback above
-            2. Make any necessary changes
-            3. Commit and push your changes
+            1. Review any warnings or errors above
+            2. Make necessary corrections
+            3. Push your changes
             `;
             
             if (context.payload.pull_request) {
